@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "111758533324",
+    "project_id": "com-example-myalitrecker-f87de",
+    "storage_bucket": "com-example-myalitrecker-f87de.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:111758533324:android:86a66b0ba732e6dabf5869",
+        "android_client_info": {
+          "package_name": "com.example.myalitrecker"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyANsfx3gmiBtwXfg0okp_U2u6Bcmd7lbKw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
