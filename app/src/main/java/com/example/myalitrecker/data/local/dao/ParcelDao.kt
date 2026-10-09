@@ -19,10 +19,44 @@ interface ParcelDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertItems(items: List<OrderItemEntity>)
 
+    @Query("SELECT * FROM order_items WHERE trackingNumber = :trackingNumber")
+    suspend fun getItemsByTracking(trackingNumber: String): List<OrderItemEntity>
+
+    @Query("SELECT * FROM order_items WHERE orderId = :orderId")
+    suspend fun getItemsByOrderId(orderId: String): List<OrderItemEntity>
+
+    @Query("UPDATE order_items SET trackingNumber = :newTrackingNumber WHERE orderId = :orderId")
+    suspend fun updateTrackingNumberForOrder(orderId: String, newTrackingNumber: String)
+
+    @Query("UPDATE parcels SET isConsolidated = :isConsolidated WHERE trackingNumber = :trackingNumber")
+    suspend fun updateConsolidatedStatus(trackingNumber: String, isConsolidated: Boolean)
+
+    @Query("DELETE FROM parcels WHERE trackingNumber LIKE 'PENDING_%' AND trackingNumber NOT IN (SELECT DISTINCT trackingNumber FROM order_items)")
+    suspend fun deleteEmptyPendingParcels()
+
     @Transaction
-    suspend fun insertParcelWithItems(parcel: ParcelEntity, items: List<OrderItemEntity>) {
+    suspend fun insertOrConsolidateParcel(parcel: ParcelEntity, items: List<OrderItemEntity>, orderIdsToConsolidate: List<String>) {
         insertParcel(parcel)
-        insertItems(items)
+
+        // 1. Move any items previously stored under pending or previous tracking numbers for these order IDs
+        for (orderId in orderIdsToConsolidate) {
+            updateTrackingNumberForOrder(orderId, parcel.trackingNumber)
+        }
+
+        // 2. Insert any new items found in this email
+        if (items.isNotEmpty()) {
+            insertItems(items)
+        }
+
+        // 3. Check if this parcel now contains multiple distinct order IDs -> mark as consolidated
+        val allItems = getItemsByTracking(parcel.trackingNumber)
+        val distinctOrders = allItems.map { it.orderId }.distinct()
+        if (distinctOrders.size > 1 || parcel.isConsolidated) {
+            updateConsolidatedStatus(parcel.trackingNumber, true)
+        }
+
+        // 4. Remove empty pending placeholder parcels
+        deleteEmptyPendingParcels()
     }
 
     @Transaction

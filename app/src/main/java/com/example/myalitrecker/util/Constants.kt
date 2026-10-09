@@ -4,7 +4,6 @@ object Constants {
     const val WEB_CLIENT_ID = "111758533324-5nabn5sdhik11lrvlms0hq4fmrmghifo.apps.googleusercontent.com"
     const val GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 
-    // Search queries for AliExpress emails
-    const val GMAIL_ALIEXPRESS_SENDER = "transaction@notice.aliexpress.com"
-    const val GMAIL_ALIEXPRESS_QUERY = "from:transaction@notice.aliexpress.com OR from:AliExpress"
+    // Broad search query for AliExpress confirmation, shipping and consolidation emails
+    const val GMAIL_ALIEXPRESS_QUERY = "from:aliexpress.com OR from:notice.aliexpress.com OR subject:AliExpress"
 }

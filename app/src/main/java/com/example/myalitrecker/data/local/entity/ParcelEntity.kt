@@ -10,5 +10,8 @@ data class ParcelEntity(
     val status: String = "Обрабатывается",
     val carrier: String = "AliExpress",
     val lastUpdated: Long = System.currentTimeMillis(),
-    val lastLocation: String? = null
+    val lastLocation: String? = null,
+    val isConsolidated: Boolean = false,
+    val destinationCountry: String? = null,
+    val originCountry: String? = "Китай"
 )
