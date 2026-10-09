@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myalitrecker.ui.components.ParcelCard
 import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.common.api.ApiException
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,21 +41,34 @@ fun MainScreen(viewModel: MainViewModel) {
     val signInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
-            try {
-                val account = task.getResult(Exception::class.java)
-                viewModel.onGoogleSignInResult(account)
-            } catch (e: Exception) {
-                e.printStackTrace()
-                viewModel.onGoogleSignInResult(null)
+        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+        try {
+            val account = task.getResult(ApiException::class.java)
+            viewModel.onGoogleSignInResult(account)
+        } catch (e: ApiException) {
+            val errorDescription = when (e.statusCode) {
+                10 -> "Ошибка 10 (DEVELOPER_ERROR): в Google Cloud Console для пакета com.example.myalitrecker не зарегистрирован SHA-1 отпечаток ключа подписи"
+                12500 -> "Ошибка 12500 (SIGN_IN_FAILED): вход отклонён Google Play Services. Проверьте OAuth экран согласия"
+                7 -> "Ошибка 7 (NETWORK_ERROR): нет соединения с серверами Google"
+                16 -> "Ошибка 16 (CANCELLED): вход отменен пользователем"
+                else -> "Код ошибки Google: ${e.statusCode} (${e.localizedMessage ?: "неизвестно"})"
             }
+            if (e.statusCode != 16) {
+                viewModel.setErrorMessage(errorDescription)
+            }
+            viewModel.onGoogleSignInResult(null)
+        } catch (e: Exception) {
+            viewModel.setErrorMessage("Ошибка: ${e.localizedMessage}")
+            viewModel.onGoogleSignInResult(null)
         }
     }
 
     LaunchedEffect(syncMessage) {
         syncMessage?.let { msg ->
-            snackbarHostState.showSnackbar(msg)
+            snackbarHostState.showSnackbar(
+                message = msg,
+                duration = SnackbarDuration.Long
+            )
             viewModel.clearSyncMessage()
         }
     }
@@ -86,8 +100,7 @@ fun MainScreen(viewModel: MainViewModel) {
                             onClick = { viewModel.syncEmails() },
                             enabled = !isSyncing
                         ) {
-                            if (isSyncing) {
-                                CircularProgressIndicator(
+                            if (isSyncing) {                                CircularProgressIndicator(
                                     modifier = Modifier.size(20.dp),
                                     strokeWidth = 2.dp,
                                     color = MaterialTheme.colorScheme.primary

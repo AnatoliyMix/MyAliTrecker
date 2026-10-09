@@ -52,6 +52,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setErrorMessage(msg: String) {
+        _syncMessage.value = msg
+    }
+
     fun syncEmails() {
         val account = _signedInAccount.value ?: return
         if (_isSyncing.value) return
