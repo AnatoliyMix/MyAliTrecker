@@ -7,7 +7,6 @@ import java.util.regex.Pattern
 
 object AliExpressEmailParser {
 
-    // Regex patterns for tracking numbers and order IDs
     private val TRACKING_REGEX = Pattern.compile(
         "(?:tracking|номер отслеживания|трек|трек-номер|track(?:ing)?\\s*(?:no|number)?)[:\\s#]*([A-Z0-9]{8,25})",
         Pattern.CASE_INSENSITIVE
@@ -18,9 +17,18 @@ object AliExpressEmailParser {
         Pattern.CASE_INSENSITIVE
     )
 
-    // Standard AliExpress tracking format fallback regex (e.g. AECA..., LP..., RA...RU, 123456789012)
     private val FALLBACK_TRACKING_PATTERN = Pattern.compile(
-        "\\b(AECA\\d{9,15}[A-Z0-9]*|LP\\d{12,16}|[A-Z]{2}\\d{9}[A-Z]{2}|NLE[A-Z0-9]{10,15}|\\d{12,15})\\b",
+        "\\b(AECA\\d{9,15}[A-Z0-9]*|LP\\d{12,16}|[A-Z]{2}\\d{9}[A-Z]{2}|NLE[A-Z0-9]{10,15}|SY[A-Z0-9]{8,14}|YT\\d{12,16}|\\d{12,15})\\b",
+        Pattern.CASE_INSENSITIVE
+    )
+
+    private val CONSOLIDATION_REGEX = Pattern.compile(
+        "(?:combined\\s*delivery|consolidat|объединен|сборн|заказы\\s*объединены|upgraded\\s*to\\s*combined)",
+        Pattern.CASE_INSENSITIVE
+    )
+
+    private val PRICE_REGEX = Pattern.compile(
+        "([$€₴₽]\\s*\\d+(?:[.,]\\d{2})?|\\d+(?:[.,]\\d{2})?\\s*[$€₴₽]|\\d+(?:[.,]\\d{2})?\\s*(?:USD|EUR|UAH|RUB|руб))",
         Pattern.CASE_INSENSITIVE
     )
 
@@ -28,21 +36,14 @@ object AliExpressEmailParser {
         val doc = Jsoup.parse(htmlBody)
         val textContent = doc.text()
 
-        // 1. Extract Order ID
-        var orderId = extractOrderId(textContent)
-        if (orderId == null) {
-            // Check links with orderId parameters
-            for (element in doc.select("a[href]")) {
-                val href = element.attr("href")
-                val matcher = Pattern.compile("orderId=(\\d{10,18})", Pattern.CASE_INSENSITIVE).matcher(href)
-                if (matcher.find()) {
-                    orderId = matcher.group(1)
-                    break
-                }
-            }
-        }
+        // 1. Detect if this email is a Consolidation / Combined Delivery notice
+        val isConsolidated = CONSOLIDATION_REGEX.matcher(textContent).find()
 
-        // 2. Extract Tracking Number
+        // 2. Extract all Order IDs
+        val orderIds = extractAllOrderIds(textContent, doc)
+        val primaryOrderId = orderIds.firstOrNull()
+
+        // 3. Extract Tracking Number
         var trackingNumber = extractTrackingNumber(textContent)
         if (trackingNumber == null) {
             // Search links for tracking parameters
@@ -56,16 +57,18 @@ object AliExpressEmailParser {
             }
         }
 
-        // 3. Extract Items (Title + Image URL)
+        // 4. Extract Items (Title + Image URL + Price)
         val items = mutableListOf<ParsedItem>()
-        val defaultOrderId = orderId ?: "UNKNOWN_$emailId"
+        val defaultOrderId = primaryOrderId ?: "UNKNOWN_$emailId"
 
-        // Find product images (usually hosted on alicdn.com)
+        // Search product cards / tables or product images
         val imgElements = doc.select("img[src*=alicdn.com], img[src*=aliexpress]")
+        var orderIdIndex = 0
+
         for (img in imgElements) {
             val src = img.attr("src")
-            // Ignore icons, logos or tiny tracking pixels
-            if (src.contains("logo") || src.contains("icon") || src.contains("avatar") || src.contains("banner")) {
+            // Ignore icons, logos, avatars, buttons, tracking pixels
+            if (src.contains("logo") || src.contains("icon") || src.contains("avatar") || src.contains("banner") || src.contains("badge")) {
                 continue
             }
 
@@ -82,14 +85,31 @@ object AliExpressEmailParser {
                 }
             }
 
+            // Look for price near the image
+            val parentContainer = img.parents().firstOrNull { it.tagName() == "tr" || it.tagName() == "div" || it.tagName() == "td" }
+            val priceText = parentContainer?.let { extractPrice(it.text()) }
+
             if (title.isNotBlank() && title.length > 3) {
-                // Format image url to https
-                val formattedImageUrl = if (src.startsWith("//")) "https:$src" else src
+                // Determine which orderId this item belongs to
+                val itemOrderId = if (orderIds.isNotEmpty()) {
+                    orderIds[orderIdIndex.coerceAtMost(orderIds.size - 1)]
+                } else {
+                    defaultOrderId
+                }
+                orderIdIndex++
+
+                val formattedImageUrl = when {
+                    src.startsWith("//") -> "https:$src"
+                    src.startsWith("http") -> src
+                    else -> "https://$src"
+                }
+
                 items.add(
                     ParsedItem(
-                        orderId = defaultOrderId,
-                        title = title,
-                        imageUrl = formattedImageUrl
+                        orderId = itemOrderId,
+                        title = title.take(150),
+                        imageUrl = formattedImageUrl,
+                        price = priceText
                     )
                 )
             }
@@ -102,23 +122,39 @@ object AliExpressEmailParser {
                 ParsedItem(
                     orderId = defaultOrderId,
                     title = subjectOrSnippet.take(100),
-                    imageUrl = null
+                    imageUrl = null,
+                    price = extractPrice(textContent)
                 )
             )
         }
 
         return ParsedAliExpressEmail(
             emailId = emailId,
-            orderId = orderId,
+            orderId = primaryOrderId,
+            orderIds = orderIds,
             trackingNumber = trackingNumber,
             items = items,
-            date = date
+            date = date,
+            isConsolidated = isConsolidated || orderIds.size > 1
         )
     }
 
-    private fun extractOrderId(text: String): String? {
+    private fun extractAllOrderIds(text: String, doc: org.jsoup.nodes.Document): List<String> {
+        val results = mutableSetOf<String>()
         val matcher = ORDER_ID_REGEX.matcher(text)
-        return if (matcher.find()) matcher.group(1) else null
+        while (matcher.find()) {
+            matcher.group(1)?.let { results.add(it) }
+        }
+
+        // Check links with orderId parameters
+        for (element in doc.select("a[href]")) {
+            val href = element.attr("href")
+            val linkMatcher = Pattern.compile("orderId=(\\d{10,18})", Pattern.CASE_INSENSITIVE).matcher(href)
+            while (linkMatcher.find()) {
+                linkMatcher.group(1)?.let { results.add(it) }
+            }
+        }
+        return results.toList()
     }
 
     private fun extractTrackingNumber(text: String): String? {
@@ -131,5 +167,10 @@ object AliExpressEmailParser {
             return fallbackMatcher.group(1)
         }
         return null
+    }
+
+    private fun extractPrice(text: String): String? {
+        val matcher = PRICE_REGEX.matcher(text)
+        return if (matcher.find()) matcher.group(1) else null
     }
 }

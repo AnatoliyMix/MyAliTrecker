@@ -11,13 +11,15 @@ import com.google.android.gms.common.api.Scope
 class GmailAuthManager(private val context: Context) {
 
     fun getGoogleSignInClient(): GoogleSignInClient {
-        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+        val gsoBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
             .requestScopes(Scope(Constants.GMAIL_SCOPE))
-            .requestIdToken(Constants.WEB_CLIENT_ID)
-            .build()
 
-        return GoogleSignIn.getClient(context, gso)
+        if (Constants.WEB_CLIENT_ID.isNotBlank() && !Constants.WEB_CLIENT_ID.startsWith("YOUR_")) {
+            gsoBuilder.requestIdToken(Constants.WEB_CLIENT_ID)
+        }
+
+        return GoogleSignIn.getClient(context, gsoBuilder.build())
     }
 
     fun getSignedInAccount(): GoogleSignInAccount? {
