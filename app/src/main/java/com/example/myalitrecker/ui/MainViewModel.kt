@@ -8,6 +8,7 @@ import com.example.myalitrecker.data.local.AppDatabase
 import com.example.myalitrecker.data.local.model.ParcelWithItems
 import com.example.myalitrecker.data.remote.GmailAuthManager
 import com.example.myalitrecker.data.remote.GmailRepository
+import com.example.myalitrecker.data.remote.aliexpress.AliExpressOrder
 import com.example.myalitrecker.data.remote.aliexpress.AliExpressOrderRepository
 import com.example.myalitrecker.data.remote.aliexpress.AliExpressSessionManager
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
@@ -63,11 +64,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _isAliExpressLoggedIn.value = aliExpressSessionManager.isLoggedIn()
     }
 
-    fun onAliExpressLoginSuccess(cookies: String) {
+    fun onOrdersExtractedFromWebView(orders: List<AliExpressOrder>, cookies: String) {
         aliExpressSessionManager.saveCookies(cookies)
         _isAliExpressLoggedIn.value = true
-        _syncMessage.value = "Успешный вход в AliExpress! Запускаем синхронизацию..."
-        syncAliExpressOrders()
+
+        viewModelScope.launch {
+            aliExpressRepository.saveOrdersDirectly(orders)
+            _syncMessage.value = "Успешно синхронизировано ${orders.size} заказов AliExpress!"
+        }
     }
 
     fun logoutAliExpress() {
@@ -89,7 +93,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _syncMessage.value = if (count > 0)
                     "Синхронизация AliExpress: обновлено заказов — $count"
                 else
-                    "Синхронизация AliExpress: заказы обновлены"
+                    "Заказы обновлены. Если список пуст, нажмите кнопку AliExpress для обновления страницы."
             } else {
                 val err = result.exceptionOrNull()?.localizedMessage ?: "Ошибка синхронизации"
                 _syncMessage.value = "AliExpress: $err"

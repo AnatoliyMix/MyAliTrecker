@@ -2,36 +2,103 @@ package com.example.myalitrecker.ui.components
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
+import android.os.Handler
+import android.os.Looper
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.foundation.background
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.myalitrecker.data.remote.aliexpress.AliExpressDataExtractor
+import com.example.myalitrecker.data.remote.aliexpress.AliExpressOrder
+import org.json.JSONTokener
 
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AliExpressLoginDialog(
+    initialIsLoggedIn: Boolean = false,
     onDismissRequest: () -> Unit,
-    onLoginSuccess: (cookieString: String) -> Unit
+    onOrdersExtracted: (orders: List<AliExpressOrder>, cookieString: String) -> Unit
 ) {
     var isLoading by remember { mutableStateOf(true) }
     var progress by remember { mutableFloatStateOf(0f) }
+    var currentTitle by remember { mutableStateOf(if (initialIsLoggedIn) "Синхронизация заказов AliExpress" else "Вход в AliExpress") }
+    var statusText by remember { mutableStateOf(if (initialIsLoggedIn) "Загружаем страницу ваших заказов..." else "Войдите в аккаунт на официальном сайте") }
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
+    var hasExtractedOrders by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    val orderUrl = "https://www.aliexpress.com/p/order/index.html"
+    val loginUrl = "https://m.aliexpress.com/login.html"
+
+    fun extractOrdersFromWebView(wv: WebView, cookies: String) {
+        val js = """
+            (function() {
+                try {
+                    if (window.runParams && window.runParams.data) {
+                        return JSON.stringify(window.runParams.data);
+                    }
+                    if (window.runParams && window.runParams.orders) {
+                        return JSON.stringify(window.runParams.orders);
+                    }
+                    if (window.__INITIAL_DATA__) {
+                        return JSON.stringify(window.__INITIAL_DATA__);
+                    }
+                    var scripts = document.querySelectorAll('script');
+                    for (var i = 0; i < scripts.length; i++) {
+                        var s = scripts[i].innerText || "";
+                        if (s.indexOf('orderId') !== -1 || s.indexOf('orderList') !== -1) {
+                            var match = s.match(/(\{.*"orderId".*\})/);
+                            if (match) return match[1];
+                        }
+                    }
+                    return document.documentElement.outerHTML;
+                } catch(e) {
+                    return document.documentElement.outerHTML;
+                }
+            })();
+        """.trimIndent()
+
+        wv.evaluateJavascript(js) { result ->
+            if (result != null && result != "null" && result != "\"\"") {
+                val raw = try {
+                    JSONTokener(result).nextValue().toString()
+                } catch (e: Exception) {
+                    result.removeSurrounding("\"").replace("\\\"", "\"").replace("\\n", "\n")
+                }
+
+                val orders = if (raw.trim().startsWith("{")) {
+                    AliExpressDataExtractor.parseFromJson(raw)
+                } else {
+                    AliExpressDataExtractor.parseFromHtml(raw)
+                }
+
+                if (orders.isNotEmpty() && !hasExtractedOrders) {
+                    hasExtractedOrders = true
+                    Toast.makeText(context, "Найдено заказов: ${orders.size}!", Toast.LENGTH_SHORT).show()
+                    onOrdersExtracted(orders, cookies)
+                }
+            }
+        }
+    }
 
     Dialog(
         onDismissRequest = onDismissRequest,
@@ -49,19 +116,20 @@ fun AliExpressLoginDialog(
             color = MaterialTheme.colorScheme.surface
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // Header
+                // Top App Bar
                 TopAppBar(
                     title = {
                         Column {
                             Text(
-                                text = "Вход в AliExpress",
+                                text = currentTitle,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Безопасная авторизация на официальном сайте",
+                                text = statusText,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1
                             )
                         }
                     },
@@ -83,7 +151,11 @@ fun AliExpressLoginDialog(
                 }
 
                 // WebView Container
-                Box(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
                         factory = { ctx ->
@@ -124,28 +196,72 @@ fun AliExpressLoginDialog(
                                         val currentUrl = url ?: ""
                                         val cookies = cookieManager.getCookie(currentUrl) ?: ""
 
-                                        // Check if user has successfully logged in
-                                        // Login indicators: xman_us_t, login_aliyunid_ticket, intl_common_token
                                         val isAuth = cookies.contains("xman_us_t") ||
                                                 cookies.contains("login_aliyunid_ticket") ||
                                                 cookies.contains("intl_common_token")
 
-                                        val isOnAccountOrHome = currentUrl.contains("/p/order/") ||
-                                                currentUrl.contains("/orderList") ||
-                                                currentUrl.contains("/user/") ||
-                                                (isAuth && (currentUrl == "https://m.aliexpress.com/" || currentUrl.contains("aliexpress.com/home")))
-
-                                        if (isAuth && (isOnAccountOrHome || currentUrl.contains("aliexpress.com"))) {
-                                            cookieManager.flush()
-                                            onLoginSuccess(cookies)
+                                        if (isAuth) {
+                                            if (currentUrl.contains("/order") || currentUrl.contains("orderList")) {
+                                                currentTitle = "Синхронизация заказов"
+                                                statusText = "Страница открыта, считываем заказы..."
+                                                // Give React 1.5 seconds to populate DOM
+                                                Handler(Looper.getMainLooper()).postDelayed({
+                                                    extractOrdersFromWebView(view ?: this@apply, cookies)
+                                                }, 1500)
+                                            } else if (!currentUrl.contains("/order")) {
+                                                // Logged in but not on orders page -> redirect to order page!
+                                                currentTitle = "Переходим к заказам"
+                                                statusText = "Авторизация подтверждена, открываем заказы..."
+                                                view?.loadUrl(orderUrl)
+                                            }
                                         }
                                     }
                                 }
 
-                                loadUrl("https://m.aliexpress.com/login.html")
+                                val targetUrl = if (initialIsLoggedIn) orderUrl else loginUrl
+                                loadUrl(targetUrl)
                             }
                         }
                     )
+                }
+
+                // Bottom Action bar to manually capture visible orders if needed
+                Surface(
+                    tonalElevation = 3.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Видите ваши заказы на экране?",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Нажмите кнопку справа, чтобы считать их в приложение",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Button(
+                            onClick = {
+                                webViewInstance?.let { wv ->
+                                    val cookies = CookieManager.getInstance().getCookie(wv.url) ?: ""
+                                    extractOrdersFromWebView(wv, cookies)
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Считать заказы", fontSize = 12.sp)
+                        }
+                    }
                 }
             }
         }

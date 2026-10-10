@@ -141,7 +141,7 @@ fun MainScreen(viewModel: MainViewModel) {
                     IconButton(
                         onClick = {
                             if (isAliExpressLoggedIn) {
-                                viewModel.syncAliExpressOrders()
+                                showAliExpressLoginDialog = true
                             } else if (signedInAccount != null) {
                                 viewModel.syncGmailEmails()
                             } else {
@@ -164,7 +164,7 @@ fun MainScreen(viewModel: MainViewModel) {
                         }
                     }
 
-                    // AliExpress button
+                    // AliExpress status button
                     if (!isAliExpressLoggedIn) {
                         FilledTonalButton(
                             onClick = { showAliExpressLoginDialog = true },
@@ -239,7 +239,7 @@ fun MainScreen(viewModel: MainViewModel) {
                         isPendingTab = selectedTab == 1,
                         isSyncing = isSyncing,
                         onSyncClick = {
-                            if (isAliExpressLoggedIn) viewModel.syncAliExpressOrders()
+                            if (isAliExpressLoggedIn) showAliExpressLoginDialog = true
                             else if (signedInAccount != null) viewModel.syncGmailEmails()
                             else showAliExpressLoginDialog = true
                         }
@@ -268,10 +268,11 @@ fun MainScreen(viewModel: MainViewModel) {
 
     if (showAliExpressLoginDialog) {
         AliExpressLoginDialog(
+            initialIsLoggedIn = isAliExpressLoggedIn,
             onDismissRequest = { showAliExpressLoginDialog = false },
-            onLoginSuccess = { cookies ->
+            onOrdersExtracted = { orders, cookies ->
                 showAliExpressLoginDialog = false
-                viewModel.onAliExpressLoginSuccess(cookies)
+                viewModel.onOrdersExtractedFromWebView(orders, cookies)
             }
         )
     }
