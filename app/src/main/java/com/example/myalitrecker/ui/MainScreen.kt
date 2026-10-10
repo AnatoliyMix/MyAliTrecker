@@ -1,30 +1,34 @@
 package com.example.myalitrecker.ui
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myalitrecker.ui.components.ParcelCard
+import com.example.myalitrecker.util.SignatureHelper
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.common.api.ApiException
 
@@ -46,11 +50,12 @@ fun MainScreen(viewModel: MainViewModel) {
             val account = task.getResult(ApiException::class.java)
             viewModel.onGoogleSignInResult(account)
         } catch (e: ApiException) {
+            val sha1 = SignatureHelper.getAppSignatureSha1(context)
             val errorDescription = when (e.statusCode) {
-                10 -> "Ошибка 10 (DEVELOPER_ERROR): в Google Cloud Console для пакета com.example.myalitrecker не зарегистрирован SHA-1 отпечаток ключа подписи"
-                12500 -> "Ошибка 12500 (SIGN_IN_FAILED): вход отклонён Google Play Services. Проверьте OAuth экран согласия"
-                7 -> "Ошибка 7 (NETWORK_ERROR): нет соединения с серверами Google"
-                16 -> "Ошибка 16 (CANCELLED): вход отменен пользователем"
+                10 -> "Ошибка 10 (DEVELOPER_ERROR):\n1) Проверьте Test Users в Google Cloud Console\n2) Проверьте SHA-1 ($sha1)\n3) Включен ли Gmail API"
+                12500 -> "Ошибка 12500 (SIGN_IN_FAILED): OAuth экран согласия отклонил вход"
+                7 -> "Ошибка 7 (NETWORK_ERROR): нет сети"
+                16 -> "Отменено пользователем"
                 else -> "Код ошибки Google: ${e.statusCode} (${e.localizedMessage ?: "неизвестно"})"
             }
             if (e.statusCode != 16) {
@@ -100,7 +105,8 @@ fun MainScreen(viewModel: MainViewModel) {
                             onClick = { viewModel.syncEmails() },
                             enabled = !isSyncing
                         ) {
-                            if (isSyncing) {                                CircularProgressIndicator(
+                            if (isSyncing) {
+                                CircularProgressIndicator(
                                     modifier = Modifier.size(20.dp),
                                     strokeWidth = 2.dp,
                                     color = MaterialTheme.colorScheme.primary
@@ -168,42 +174,93 @@ fun GoogleSignInCard(
     onSignInClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val currentSha1 = remember { SignatureHelper.getAppSignatureSha1(context) }
+
     Card(
         modifier = modifier
-            .fillMaxWidth(0.9f)
+            .fillMaxWidth(0.92f)
             .padding(16.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Column(
-            modifier = Modifier.padding(24.dp),
+            modifier = Modifier.padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
             Icon(
                 imageVector = Icons.Default.AccountCircle,
                 contentDescription = null,
-                modifier = Modifier.size(64.dp),
+                modifier = Modifier.size(56.dp),
                 tint = MaterialTheme.colorScheme.primary
             )
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = "Вход через Google Почту",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Выберите ваш Google аккаунт на телефоне. Приложение автоматически найдет все трек-номера и заказы AliExpress из ваших писем и объединит их в посылки.",
+                text = "Приложение автоматически найдет все трек-номера и заказы AliExpress из ваших писем и объединит их в посылки.",
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
             Button(
                 onClick = onSignInClick,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Войти через Google")
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Diagnostic card showing exact APK package and SHA-1 on device
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("SHA1", currentSha1))
+                        Toast.makeText(context, "SHA-1 скопирован!", Toast.LENGTH_SHORT).show()
+                    }
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Отпечаток этого APK (нажмите для копирования):",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = "Пакет: ${context.packageName}",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                    Text(
+                        text = "SHA-1: $currentSha1",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
             }
         }
     }
