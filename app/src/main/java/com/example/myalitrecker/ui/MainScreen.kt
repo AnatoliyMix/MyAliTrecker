@@ -38,23 +38,25 @@ fun MainScreen(viewModel: MainViewModel) {
     val parcels by viewModel.parcels.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
     val syncMessage by viewModel.syncMessage.collectAsState()
+    val recoverableAuthIntent by viewModel.recoverableAuthIntent.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
 
-    val hasGmailAccess = remember(signedInAccount) {
-        signedInAccount?.let { viewModel.getAuthManager().hasGmailPermission(it) } ?: false
-    }
-
-    // Permission launcher for Gmail scope
-    val gmailPermissionLauncher = rememberLauncherForActivityResult(
+    // Launcher for UserRecoverableAuthIOException (Google's native consent dialog for Gmail scope)
+    val recoverableAuthLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
-    ) { _ ->
-        val account = GoogleSignIn.getLastSignedInAccount(context)
-        if (account != null && viewModel.getAuthManager().hasGmailPermission(account)) {
-            viewModel.onGoogleSignInResult(account)
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
             viewModel.syncEmails()
         } else {
-            viewModel.setErrorMessage("Доступ к чтению писем не был подтвержден")
+            viewModel.setErrorMessage("Доступ к чтению писем Gmail не был подтвержден")
+        }
+    }
+
+    LaunchedEffect(recoverableAuthIntent) {
+        recoverableAuthIntent?.let { intent ->
+            recoverableAuthLauncher.launch(intent)
+            viewModel.clearRecoverableAuthIntent()
         }
     }
 
@@ -66,14 +68,6 @@ fun MainScreen(viewModel: MainViewModel) {
         try {
             val account = task.getResult(ApiException::class.java)
             viewModel.onGoogleSignInResult(account)
-            if (!viewModel.getAuthManager().hasGmailPermission(account)) {
-                // Request Gmail permission explicitly
-                val gso = com.google.android.gms.auth.api.signin.GoogleSignInOptions.Builder()
-                    .requestScopes(Scope(Constants.GMAIL_SCOPE))
-                    .build()
-                val client = GoogleSignIn.getClient(context, gso)
-                gmailPermissionLauncher.launch(client.signInIntent)
-            }
         } catch (e: ApiException) {
             val errorDescription = when (e.statusCode) {
                 10 -> "Ошибка 10 (DEVELOPER_ERROR):\nПопробуйте кнопку «Альтернативный вход» ниже."
@@ -170,51 +164,6 @@ fun MainScreen(viewModel: MainViewModel) {
                 )
             } else {
                 Column(modifier = Modifier.fillMaxSize()) {
-                    if (!hasGmailAccess) {
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Требуется доступ к Gmail",
-                                        fontWeight = FontWeight.Bold,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onErrorContainer
-                                    )
-                                    Text(
-                                        text = "Для поиска писем от AliExpress предоставьте разрешение.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onErrorContainer
-                                    )
-                                }
-                                Button(
-                                    onClick = {
-                                        val gso = com.google.android.gms.auth.api.signin.GoogleSignInOptions.Builder()
-                                            .requestScopes(Scope(Constants.GMAIL_SCOPE))
-                                            .build()
-                                        val client = GoogleSignIn.getClient(context, gso)
-                                        gmailPermissionLauncher.launch(client.signInIntent)
-                                    },
-                                    modifier = Modifier.padding(start = 8.dp)
-                                ) {
-                                    Text("Разрешить")
-                                }
-                            }
-                        }
-                    }
-
                     if (parcels.isEmpty()) {
                         EmptyStateView(
                             isSyncing = isSyncing,

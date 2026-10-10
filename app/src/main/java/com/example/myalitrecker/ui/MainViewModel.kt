@@ -1,6 +1,7 @@
 package com.example.myalitrecker.ui
 
 import android.app.Application
+import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.myalitrecker.data.local.AppDatabase
@@ -8,6 +9,8 @@ import com.example.myalitrecker.data.local.model.ParcelWithItems
 import com.example.myalitrecker.data.remote.GmailAuthManager
 import com.example.myalitrecker.data.remote.GmailRepository
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.api.client.googleapis.extensions.android.gms.auth.UserRecoverableAuthIOException
+import com.google.api.client.googleapis.json.GoogleJsonResponseException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -36,6 +39,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _syncMessage = MutableStateFlow<String?>(null)
     val syncMessage: StateFlow<String?> = _syncMessage.asStateFlow()
+
+    private val _recoverableAuthIntent = MutableStateFlow<Intent?>(null)
+    val recoverableAuthIntent: StateFlow<Intent?> = _recoverableAuthIntent.asStateFlow()
 
     init {
         checkSignedInAccount()
@@ -68,11 +74,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _isSyncing.value = false
             if (result.isSuccess) {
                 val count = result.getOrDefault(0)
-                _syncMessage.value = "Синхронизация завершена: обработано писем — $count"
+                _syncMessage.value = if (count > 0)
+                    "Синхронизация завершена: обработано писем — $count"
+                else
+                    "Синхронизация завершена: новых писем от AliExpress не найдено"
             } else {
-                _syncMessage.value = "Ошибка синхронизации: ${result.exceptionOrNull()?.localizedMessage}"
+                val ex = result.exceptionOrNull()
+                if (ex is UserRecoverableAuthIOException) {
+                    _recoverableAuthIntent.value = ex.intent
+                } else {
+                    val details = when (ex) {
+                        is GoogleJsonResponseException -> {
+                            "Google API (${ex.statusCode}): ${ex.details?.message ?: ex.statusMessage}"
+                        }
+                        else -> ex?.message ?: ex?.localizedMessage ?: ex?.javaClass?.simpleName ?: "Неизвестная ошибка"
+                    }
+                    _syncMessage.value = "Ошибка: $details"
+                }
             }
         }
+    }
+
+    fun clearRecoverableAuthIntent() {
+        _recoverableAuthIntent.value = null
     }
 
     fun signOut() {

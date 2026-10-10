@@ -9,6 +9,7 @@ import com.example.myalitrecker.data.parser.AliExpressEmailParser
 import com.example.myalitrecker.util.Constants
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
+import com.google.api.client.googleapis.extensions.android.gms.auth.UserRecoverableAuthIOException
 import com.google.api.client.http.javanet.NetHttpTransport
 import com.google.api.client.json.gson.GsonFactory
 import com.google.api.services.gmail.Gmail
@@ -28,7 +29,12 @@ class GmailRepository(private val context: Context) {
                 context,
                 Collections.singleton(Constants.GMAIL_SCOPE)
             )
-            credential.selectedAccount = account.account
+
+            if (account.account != null) {
+                credential.selectedAccount = account.account
+            } else if (!account.email.isNullOrBlank()) {
+                credential.selectedAccountName = account.email
+            }
 
             val gmailService = Gmail.Builder(
                 NetHttpTransport(),
@@ -111,6 +117,8 @@ class GmailRepository(private val context: Context) {
             }
 
             Result.success(processedCount)
+        } catch (e: UserRecoverableAuthIOException) {
+            Result.failure(e)
         } catch (e: Exception) {
             e.printStackTrace()
             Result.failure(e)
