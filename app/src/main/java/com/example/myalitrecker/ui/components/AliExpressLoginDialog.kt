@@ -2,11 +2,13 @@ package com.example.myalitrecker.ui.components
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
@@ -93,8 +95,10 @@ fun AliExpressLoginDialog(
 
                 if (orders.isNotEmpty() && !hasExtractedOrders) {
                     hasExtractedOrders = true
-                    Toast.makeText(context, "Найдено заказов: ${orders.size}!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Успешно найдено заказов: ${orders.size}!", Toast.LENGTH_SHORT).show()
                     onOrdersExtracted(orders, cookies)
+                } else if (orders.isEmpty()) {
+                    Toast.makeText(context, "Идет загрузка страницы... Подождите пару секунд", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -176,7 +180,8 @@ fun AliExpressLoginDialog(
                                     databaseEnabled = true
                                     useWideViewPort = true
                                     loadWithOverviewMode = true
-                                    userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+                                    // Use modern Chrome desktop/tablet user agent to stop AliExpress from redirecting to native app via aliexpress://
+                                    userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
                                 }
 
                                 webChromeClient = object : WebChromeClient() {
@@ -187,6 +192,31 @@ fun AliExpressLoginDialog(
                                 }
 
                                 webViewClient = object : WebViewClient() {
+                                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                        val u = request?.url?.toString() ?: return false
+                                        return handleDeepLinks(view, u)
+                                    }
+
+                                    @Suppress("DEPRECATION")
+                                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                                        val u = url ?: return false
+                                        return handleDeepLinks(view, u)
+                                    }
+
+                                    private fun handleDeepLinks(view: WebView?, url: String): Boolean {
+                                        if (url.startsWith("aliexpress://") || url.startsWith("intent://") || url.startsWith("market://")) {
+                                            // Intercept AliExpress app redirect to prevent ERR_UNKNOWN_URL_SCHEME!
+                                            val uri = Uri.parse(url)
+                                            val nested = uri.getQueryParameter("url")
+                                            if (!nested.isNullOrBlank()) {
+                                                val decoded = Uri.decode(nested)
+                                                view?.loadUrl(decoded)
+                                            }
+                                            return true // Handled! Do not pass to WebView
+                                        }
+                                        return false
+                                    }
+
                                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                         isLoading = true
                                     }
@@ -204,12 +234,11 @@ fun AliExpressLoginDialog(
                                             if (currentUrl.contains("/order") || currentUrl.contains("orderList")) {
                                                 currentTitle = "Синхронизация заказов"
                                                 statusText = "Страница открыта, считываем заказы..."
-                                                // Give React 1.5 seconds to populate DOM
+                                                // Give 2 seconds for React to finish rendering DOM cards
                                                 Handler(Looper.getMainLooper()).postDelayed({
                                                     extractOrdersFromWebView(view ?: this@apply, cookies)
-                                                }, 1500)
-                                            } else if (!currentUrl.contains("/order")) {
-                                                // Logged in but not on orders page -> redirect to order page!
+                                                }, 2000)
+                                            } else if (!currentUrl.contains("/order") && !currentUrl.contains("login")) {
                                                 currentTitle = "Переходим к заказам"
                                                 statusText = "Авторизация подтверждена, открываем заказы..."
                                                 view?.loadUrl(orderUrl)
@@ -225,7 +254,7 @@ fun AliExpressLoginDialog(
                     )
                 }
 
-                // Bottom Action bar to manually capture visible orders if needed
+                // Bottom Action bar to manually capture visible orders
                 Surface(
                     tonalElevation = 3.dp,
                     modifier = Modifier.fillMaxWidth()
