@@ -14,18 +14,27 @@ class GmailAuthManager(private val context: Context) {
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
             .requestScopes(Scope(Constants.GMAIL_SCOPE))
+            .requestIdToken(Constants.WEB_CLIENT_ID)
             .build()
 
         return GoogleSignIn.getClient(context, gso)
     }
 
+    fun getBasicSignInClient(): GoogleSignInClient {
+        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+            .requestIdToken(Constants.WEB_CLIENT_ID)
+            .build()
+
+        return GoogleSignIn.getClient(context, gso)
+    }
+
+    fun hasGmailPermission(account: GoogleSignInAccount): Boolean {
+        return GoogleSignIn.hasPermissions(account, Scope(Constants.GMAIL_SCOPE))
+    }
+
     fun getSignedInAccount(): GoogleSignInAccount? {
-        val account = GoogleSignIn.getLastSignedInAccount(context)
-        return if (account != null && GoogleSignIn.hasPermissions(account, Scope(Constants.GMAIL_SCOPE))) {
-            account
-        } else {
-            null
-        }
+        return GoogleSignIn.getLastSignedInAccount(context)
     }
 
     fun signOut(onComplete: () -> Unit) {

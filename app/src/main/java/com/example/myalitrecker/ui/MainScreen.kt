@@ -12,10 +12,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Inbox
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,9 +25,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myalitrecker.ui.components.ParcelCard
+import com.example.myalitrecker.util.Constants
 import com.example.myalitrecker.util.SignatureHelper
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.Scope
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -42,6 +41,24 @@ fun MainScreen(viewModel: MainViewModel) {
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
 
+    val hasGmailAccess = remember(signedInAccount) {
+        signedInAccount?.let { viewModel.getAuthManager().hasGmailPermission(it) } ?: false
+    }
+
+    // Permission launcher for Gmail scope
+    val gmailPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { _ ->
+        val account = GoogleSignIn.getLastSignedInAccount(context)
+        if (account != null && viewModel.getAuthManager().hasGmailPermission(account)) {
+            viewModel.onGoogleSignInResult(account)
+            viewModel.syncEmails()
+        } else {
+            viewModel.setErrorMessage("Доступ к чтению писем не был подтвержден")
+        }
+    }
+
+    // Main Google Sign-In launcher
     val signInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -49,12 +66,19 @@ fun MainScreen(viewModel: MainViewModel) {
         try {
             val account = task.getResult(ApiException::class.java)
             viewModel.onGoogleSignInResult(account)
+            if (!viewModel.getAuthManager().hasGmailPermission(account)) {
+                // Request Gmail permission explicitly
+                val gso = com.google.android.gms.auth.api.signin.GoogleSignInOptions.Builder()
+                    .requestScopes(Scope(Constants.GMAIL_SCOPE))
+                    .build()
+                val client = GoogleSignIn.getClient(context, gso)
+                gmailPermissionLauncher.launch(client.signInIntent)
+            }
         } catch (e: ApiException) {
-            val sha1 = SignatureHelper.getAppSignatureSha1(context)
             val errorDescription = when (e.statusCode) {
-                10 -> "Ошибка 10 (DEVELOPER_ERROR):\n1) Проверьте Test Users в Google Cloud Console\n2) Проверьте SHA-1 ($sha1)\n3) Включен ли Gmail API"
-                12500 -> "Ошибка 12500 (SIGN_IN_FAILED): OAuth экран согласия отклонил вход"
-                7 -> "Ошибка 7 (NETWORK_ERROR): нет сети"
+                10 -> "Ошибка 10 (DEVELOPER_ERROR):\nПопробуйте кнопку «Альтернативный вход» ниже."
+                12500 -> "Ошибка 12500: вход отклонен сервером Google"
+                7 -> "Ошибка 7: нет соединения с интернетом"
                 16 -> "Отменено пользователем"
                 else -> "Код ошибки Google: ${e.statusCode} (${e.localizedMessage ?: "неизвестно"})"
             }
@@ -134,34 +158,87 @@ fun MainScreen(viewModel: MainViewModel) {
         ) {
             if (signedInAccount == null) {
                 GoogleSignInCard(
-                    onSignInClick = {
+                    onDirectSignInClick = {
                         val client = viewModel.getAuthManager().getGoogleSignInClient()
+                        signInLauncher.launch(client.signInIntent)
+                    },
+                    onBasicSignInClick = {
+                        val client = viewModel.getAuthManager().getBasicSignInClient()
                         signInLauncher.launch(client.signInIntent)
                     },
                     modifier = Modifier.align(Alignment.Center)
                 )
-            } else if (parcels.isEmpty()) {
-                EmptyStateView(
-                    isSyncing = isSyncing,
-                    onSyncClick = { viewModel.syncEmails() },
-                    userEmail = signedInAccount?.email,
-                    modifier = Modifier.align(Alignment.Center)
-                )
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(vertical = 8.dp)
-                ) {
-                    items(
-                        items = parcels,
-                        key = { it.parcel.trackingNumber }
-                    ) { parcelWithItems ->
-                        ParcelCard(
-                            parcelWithItems = parcelWithItems,
-                            onDeleteClick = { trackingNum ->
-                                viewModel.deleteParcel(trackingNum)
+                Column(modifier = Modifier.fillMaxSize()) {
+                    if (!hasGmailAccess) {
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Требуется доступ к Gmail",
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                    Text(
+                                        text = "Для поиска писем от AliExpress предоставьте разрешение.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                }
+                                Button(
+                                    onClick = {
+                                        val gso = com.google.android.gms.auth.api.signin.GoogleSignInOptions.Builder()
+                                            .requestScopes(Scope(Constants.GMAIL_SCOPE))
+                                            .build()
+                                        val client = GoogleSignIn.getClient(context, gso)
+                                        gmailPermissionLauncher.launch(client.signInIntent)
+                                    },
+                                    modifier = Modifier.padding(start = 8.dp)
+                                ) {
+                                    Text("Разрешить")
+                                }
                             }
+                        }
+                    }
+
+                    if (parcels.isEmpty()) {
+                        EmptyStateView(
+                            isSyncing = isSyncing,
+                            onSyncClick = { viewModel.syncEmails() },
+                            userEmail = signedInAccount?.email,
+                            modifier = Modifier.fillMaxSize()
                         )
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(vertical = 8.dp)
+                        ) {
+                            items(
+                                items = parcels,
+                                key = { it.parcel.trackingNumber }
+                            ) { parcelWithItems ->
+                                ParcelCard(
+                                    parcelWithItems = parcelWithItems,
+                                    onDeleteClick = { trackingNum ->
+                                        viewModel.deleteParcel(trackingNum)
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -171,7 +248,8 @@ fun MainScreen(viewModel: MainViewModel) {
 
 @Composable
 fun GoogleSignInCard(
-    onSignInClick: () -> Unit,
+    onDirectSignInClick: () -> Unit,
+    onBasicSignInClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -208,16 +286,25 @@ fun GoogleSignInCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(modifier = Modifier.height(16.dp))
+
             Button(
-                onClick = onSignInClick,
+                onClick = onDirectSignInClick,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Войти через Google")
             }
 
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = onBasicSignInClick,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Альтернативный вход (если ошибка 10)")
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Diagnostic card showing exact APK package and SHA-1 on device
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                 shape = MaterialTheme.shapes.small,
