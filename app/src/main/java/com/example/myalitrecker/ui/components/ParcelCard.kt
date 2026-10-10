@@ -48,9 +48,15 @@ fun ParcelCard(
     val formattedDate = dateFormatter.format(Date(parcel.lastUpdated))
     var showDetailDialog by remember { mutableStateOf(false) }
 
-    // Unique orders count inside this parcel
+    val isPending = parcel.trackingNumber.startsWith("PENDING_")
+    val displayTitle = if (isPending) {
+        "Заказ #${parcel.trackingNumber.removePrefix("PENDING_")}"
+    } else {
+        parcel.trackingNumber
+    }
+
     val distinctOrdersCount = items.map { it.orderId }.distinct().size
-    val isConsolidated = parcel.isConsolidated || distinctOrdersCount > 1 || items.size > 1
+    val isConsolidated = !isPending && (parcel.isConsolidated || distinctOrdersCount > 1 || items.size > 1)
 
     Card(
         modifier = modifier
@@ -65,23 +71,29 @@ fun ParcelCard(
         Column(
             modifier = Modifier.padding(16.dp)
         ) {
-            // Header: Icon + Tracking number + Actions
+            // Header: Icon + Title + Actions
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    imageVector = if (isConsolidated) Icons.Default.AllInbox else Icons.Default.LocalShipping,
+                    imageVector = when {
+                        isPending -> Icons.Default.HourglassEmpty
+                        isConsolidated -> Icons.Default.AllInbox
+                        else -> Icons.Default.LocalShipping
+                    },
                     contentDescription = null,
-                    tint = if (isConsolidated) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+                    tint = when {
+                        isPending -> MaterialTheme.colorScheme.secondary
+                        isConsolidated -> MaterialTheme.colorScheme.tertiary
+                        else -> MaterialTheme.colorScheme.primary
+                    },
                     modifier = Modifier.size(26.dp)
                 )
-
                 Spacer(modifier = Modifier.width(10.dp))
-
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = parcel.trackingNumber,
+                        text = displayTitle,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -93,220 +105,203 @@ fun ParcelCard(
                     )
                 }
 
-                // Copy tracking button
+                // Copy button
                 IconButton(
                     onClick = {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        val clip = ClipData.newPlainText("Tracking Number", parcel.trackingNumber)
+                        val copyText = if (isPending) parcel.trackingNumber.removePrefix("PENDING_") else parcel.trackingNumber
+                        val clip = ClipData.newPlainText("ID", copyText)
                         clipboard.setPrimaryClip(clip)
-                        Toast.makeText(context, "Трек-номер скопирован!", Toast.LENGTH_SHORT).show()
+                        val msg = if (isPending) "Номер заказа скопирован!" else "Трек-номер скопирован!"
+                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                     }
                 ) {
                     Icon(
                         imageVector = Icons.Default.ContentCopy,
-                        contentDescription = "Скопировать трек",
+                        contentDescription = "Скопировать",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
                 // Delete button
-                IconButton(
-                    onClick = { onDeleteClick(parcel.trackingNumber) }
-                ) {
+                IconButton(onClick = { onDeleteClick(parcel.trackingNumber) }) {
                     Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Удалить посылку",
+                        imageVector = Icons.Default.DeleteOutline,
+                        contentDescription = "Удалить",
                         tint = MaterialTheme.colorScheme.error
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // Status chip & Carrier & Consolidation badge
+            // Badges row
             Row(
-                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                // Status badge
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = when {
+                        isPending -> MaterialTheme.colorScheme.secondaryContainer
+                        isConsolidated -> MaterialTheme.colorScheme.tertiaryContainer
+                        else -> MaterialTheme.colorScheme.primaryContainer
+                    }
+                ) {
+                    Text(
+                        text = parcel.status,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = when {
+                            isPending -> MaterialTheme.colorScheme.onSecondaryContainer
+                            isConsolidated -> MaterialTheme.colorScheme.onTertiaryContainer
+                            else -> MaterialTheme.colorScheme.onPrimaryContainer
+                        }
+                    )
+                }
+
+                // Consolidated tag
                 if (isConsolidated) {
-                    AssistChip(
-                        onClick = { showDetailDialog = true },
-                        label = { Text("Объединенная (${items.size} тов.)", fontWeight = FontWeight.Bold) },
-                        leadingIcon = {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.tertiaryContainer
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
                             Icon(
                                 imageVector = Icons.Default.Inventory2,
                                 contentDescription = null,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(12.dp),
+                                tint = MaterialTheme.colorScheme.onTertiaryContainer
                             )
-                        },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                            labelColor = MaterialTheme.colorScheme.onTertiaryContainer
-                        )
-                    )
-                }
-
-                AssistChip(
-                    onClick = { },
-                    label = { Text(parcel.status) },
-                    colors = AssistChipDefaults.assistChipColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        labelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                )
-
-                AssistChip(
-                    onClick = { },
-                    label = { Text(parcel.carrier) },
-                    colors = AssistChipDefaults.assistChipColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                        labelColor = MaterialTheme.colorScheme.onSecondaryContainer
-                    )
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Label and items count
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Товары внутри посылки (${items.size}):",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-
-                TextButton(
-                    onClick = { showDetailDialog = true },
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Text(
-                        text = "Подробнее",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Icon(
-                        imageVector = Icons.Default.ChevronRight,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // Horizontal preview list of items inside this consolidated parcel
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = PaddingValues(vertical = 4.dp)
-            ) {
-                items(items) { item ->
-                    Card(
-                        modifier = Modifier
-                            .width(140.dp)
-                            .clickable { showDetailDialog = true },
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface
-                        ),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(6.dp),
-                            horizontalAlignment = Alignment.Start
-                        ) {
-                            if (!item.imageUrl.isNullOrBlank()) {
-                                AsyncImage(
-                                    model = ImageRequest.Builder(context)
-                                        .data(item.imageUrl)
-                                        .crossfade(true)
-                                        .build(),
-                                    contentDescription = item.title,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(90.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                )
-                            } else {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(90.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.ShoppingBag,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.outline
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(4.dp))
-
+                            Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = item.title,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                fontWeight = FontWeight.Medium
+                                text = "Консолидация (${items.size} тов.)",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
                             )
-
-                            if (!item.price.isNullOrBlank()) {
-                                Text(
-                                    text = item.price,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(top = 2.dp)
-                                )
-                            }
                         }
                     }
                 }
+
+                // Carrier badge (if shipped)
+                if (!isPending) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surface
+                    ) {
+                        Text(
+                            text = parcel.carrier,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // Goods thumbnail preview (horizontal strip)
+            if (items.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalItemsPreview(items = items)
             }
         }
     }
 
-    // Detail Dialog: opens when tapping the parcel to show complete list of all items and photos
+    // Full Detail Dialog
     if (showDetailDialog) {
         ParcelDetailDialog(
             parcelWithItems = parcelWithItems,
-            onDismiss = { showDetailDialog = false }
+            onDismissRequest = { showDetailDialog = false },
+            onDeleteClick = {
+                showDetailDialog = false
+                onDeleteClick(parcel.trackingNumber)
+            }
         )
+    }
+}
+
+@Composable
+private fun HorizontalItemsPreview(items: List<OrderItemEntity>) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        items(items) { item ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(6.dp)
+                    .widthIn(max = 220.dp)
+            ) {
+                if (!item.imageUrl.isNullOrBlank()) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(item.imageUrl)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = item.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                Column {
+                    Text(
+                        text = item.title,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (!item.price.isNullOrBlank()) {
+                        Text(
+                            text = item.price,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
 @Composable
 fun ParcelDetailDialog(
     parcelWithItems: ParcelWithItems,
-    onDismiss: () -> Unit
+    onDismissRequest: () -> Unit,
+    onDeleteClick: () -> Unit
 ) {
     val context = LocalContext.current
     val parcel = parcelWithItems.parcel
     val items = parcelWithItems.items
+    val isPending = parcel.trackingNumber.startsWith("PENDING_")
 
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surface,
+    Dialog(onDismissRequest = onDismissRequest) {
+        Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.85f)
+                .padding(vertical = 16.dp),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
                     .padding(20.dp)
+                    .fillMaxWidth()
             ) {
-                // Header with close button
+                // Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -314,69 +309,52 @@ fun ParcelDetailDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = if (parcel.isConsolidated || items.size > 1) "Объединенная посылка" else "Посылка AliExpress",
+                            text = if (isPending) "Заказ AliExpress" else "Посылка AliExpress",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = parcel.trackingNumber,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary
+                            text = if (isPending) "Номер: #${parcel.trackingNumber.removePrefix("PENDING_")}" else "Трек: ${parcel.trackingNumber}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
-
-                    IconButton(onClick = onDismiss) {
-                        Icon(imageVector = Icons.Default.Close, contentDescription = "Закрыть")
+                    IconButton(onClick = onDismissRequest) {
+                        Icon(Icons.Default.Close, contentDescription = "Закрыть")
                     }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Status & Carrier row
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    AssistChip(
-                        onClick = { },
-                        label = { Text(parcel.status) }
-                    )
-                    AssistChip(
-                        onClick = { },
-                        label = { Text(parcel.carrier) }
-                    )
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
+                // Items list
                 Text(
-                    text = "Все товары в этой посылке (${items.size}):",
+                    text = "Товары в ${if (isPending) "заказе" else "посылке"} (${items.size}):",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold
                 )
-
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Scrollable list of items inside
                 LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 300.dp)
                 ) {
                     items(items) { item ->
                         Card(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
                             colors = CardDefaults.cardColors(
                                 containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
                             )
                         ) {
                             Row(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(10.dp),
+                                    .padding(8.dp)
+                                    .fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Product Image
                                 if (!item.imageUrl.isNullOrBlank()) {
                                     AsyncImage(
                                         model = ImageRequest.Builder(context)
@@ -386,53 +364,34 @@ fun ParcelDetailDialog(
                                         contentDescription = item.title,
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier
-                                            .size(70.dp)
+                                            .size(50.dp)
                                             .clip(RoundedCornerShape(8.dp))
                                     )
-                                } else {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(70.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(MaterialTheme.colorScheme.outlineVariant),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.ShoppingBag,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.outline
-                                        )
-                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
                                 }
-
-                                Spacer(modifier = Modifier.width(12.dp))
-
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = item.title,
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.Medium,
-                                        maxLines = 3,
+                                        maxLines = 2,
                                         overflow = TextOverflow.Ellipsis
                                     )
-
-                                    Spacer(modifier = Modifier.height(4.dp))
-
                                     Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
+                                        modifier = Modifier.padding(top = 2.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
                                         Text(
-                                            text = "Заказ: ${item.orderId}",
+                                            text = "Заказ #${item.orderId}",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                         if (!item.price.isNullOrBlank()) {
                                             Text(
                                                 text = item.price,
-                                                style = MaterialTheme.typography.labelMedium,
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.primary
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                fontWeight = FontWeight.Bold
                                             )
                                         }
                                     }
@@ -442,20 +401,44 @@ fun ParcelDetailDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // External tracking button
-                Button(
-                    onClick = {
-                        val trackUrl = "https://global.cainiao.com/newDetail.html?mailNoList=${parcel.trackingNumber}"
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(trackUrl))
-                        context.startActivity(intent)
-                    },
-                    modifier = Modifier.fillMaxWidth()
+                // Actions
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(imageVector = Icons.Default.OpenInBrowser, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Открыть трекинг в Cainiao / Почте")
+                    if (!isPending) {
+                        Button(
+                            onClick = {
+                                val url = "https://global.cainiao.com/newDetail.htm?mailNoList=${parcel.trackingNumber}"
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                context.startActivity(intent)
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Отследить", fontSize = 13.sp)
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                val orderId = parcel.trackingNumber.removePrefix("PENDING_")
+                                val url = "https://m.aliexpress.com/p/order/detail.html?orderId=$orderId"
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                context.startActivity(intent)
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("На AliExpress", fontSize = 13.sp)
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = onDeleteClick,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Text("Удалить", fontSize = 13.sp)
+                    }
                 }
             }
         }

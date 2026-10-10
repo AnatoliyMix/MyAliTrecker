@@ -24,30 +24,42 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.myalitrecker.ui.components.AliExpressLoginDialog
 import com.example.myalitrecker.ui.components.ParcelCard
 import com.example.myalitrecker.util.Constants
 import com.example.myalitrecker.util.SignatureHelper
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.common.api.ApiException
-import com.google.android.gms.common.api.Scope
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
     val signedInAccount by viewModel.signedInAccount.collectAsState()
+    val isAliExpressLoggedIn by viewModel.isAliExpressLoggedIn.collectAsState()
     val parcels by viewModel.parcels.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
     val syncMessage by viewModel.syncMessage.collectAsState()
     val recoverableAuthIntent by viewModel.recoverableAuthIntent.collectAsState()
+
+    var showAliExpressLoginDialog by remember { mutableStateOf(false) }
+    var selectedTab by remember { mutableIntStateOf(0) } // 0: В пути (с треками), 1: Ожидают отправки (без трека)
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
 
-    // Launcher for UserRecoverableAuthIOException (Google's native consent dialog for Gmail scope)
+    // Separate parcels into "In Transit" (with actual tracking) and "Pending shipment" (PENDING_...)
+    val inTransitParcels = remember(parcels) {
+        parcels.filter { !it.parcel.trackingNumber.startsWith("PENDING_") }
+    }
+    val pendingParcels = remember(parcels) {
+        parcels.filter { it.parcel.trackingNumber.startsWith("PENDING_") }
+    }
+
+    // Launcher for UserRecoverableAuthIOException (Google consent dialog)
     val recoverableAuthLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            viewModel.syncEmails()
+            viewModel.syncGmailEmails()
         } else {
             viewModel.setErrorMessage("Доступ к чтению писем Gmail не был подтвержден")
         }
@@ -60,7 +72,6 @@ fun MainScreen(viewModel: MainViewModel) {
         }
     }
 
-    // Main Google Sign-In launcher
     val signInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -69,15 +80,8 @@ fun MainScreen(viewModel: MainViewModel) {
             val account = task.getResult(ApiException::class.java)
             viewModel.onGoogleSignInResult(account)
         } catch (e: ApiException) {
-            val errorDescription = when (e.statusCode) {
-                10 -> "Ошибка 10 (DEVELOPER_ERROR):\nПопробуйте кнопку «Альтернативный вход» ниже."
-                12500 -> "Ошибка 12500: вход отклонен сервером Google"
-                7 -> "Ошибка 7: нет соединения с интернетом"
-                16 -> "Отменено пользователем"
-                else -> "Код ошибки Google: ${e.statusCode} (${e.localizedMessage ?: "неизвестно"})"
-            }
             if (e.statusCode != 16) {
-                viewModel.setErrorMessage(errorDescription)
+                viewModel.setErrorMessage("Ошибка Google: код ${e.statusCode}")
             }
             viewModel.onGoogleSignInResult(null)
         } catch (e: Exception) {
@@ -106,38 +110,76 @@ fun MainScreen(viewModel: MainViewModel) {
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleLarge
                         )
-                        signedInAccount?.email?.let { email ->
-                            Text(
-                                text = email,
-                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (isAliExpressLoggedIn) {
+                                Text(
+                                    text = "AliExpress подключен ✓",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            } else if (signedInAccount != null) {
+                                Text(
+                                    text = signedInAccount?.email ?: "",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            } else {
+                                Text(
+                                    text = "Прямая синхронизация заказов",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 },
                 actions = {
-                    if (signedInAccount != null) {
-                        IconButton(
-                            onClick = { viewModel.syncEmails() },
-                            enabled = !isSyncing
-                        ) {
-                            if (isSyncing) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
+                    // Sync button
+                    IconButton(
+                        onClick = {
+                            if (isAliExpressLoggedIn) {
+                                viewModel.syncAliExpressOrders()
+                            } else if (signedInAccount != null) {
+                                viewModel.syncGmailEmails()
                             } else {
-                                Icon(
-                                    imageVector = Icons.Default.Refresh,
-                                    contentDescription = "Синхронизировать почту"
-                                )
+                                showAliExpressLoginDialog = true
                             }
+                        },
+                        enabled = !isSyncing
+                    ) {
+                        if (isSyncing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Синхронизировать"
+                            )
                         }
-                        TextButton(onClick = { viewModel.signOut() }) {
-                            Text("Выйти")
+                    }
+
+                    // AliExpress button
+                    if (!isAliExpressLoggedIn) {
+                        FilledTonalButton(
+                            onClick = { showAliExpressLoginDialog = true },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.padding(end = 4.dp)
+                        ) {
+                            Text("AliExpress", fontSize = 12.sp)
+                        }
+                    } else {
+                        IconButton(onClick = { viewModel.logoutAliExpress() }) {
+                            Icon(
+                                imageVector = Icons.Default.Logout,
+                                contentDescription = "Выйти из AliExpress",
+                                tint = MaterialTheme.colorScheme.error
+                            )
                         }
                     }
                 }
@@ -150,152 +192,133 @@ fun MainScreen(viewModel: MainViewModel) {
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            if (signedInAccount == null) {
-                GoogleSignInCard(
-                    onDirectSignInClick = {
-                        val client = viewModel.getAuthManager().getGoogleSignInClient()
-                        signInLauncher.launch(client.signInIntent)
-                    },
-                    onBasicSignInClick = {
-                        val client = viewModel.getAuthManager().getBasicSignInClient()
-                        signInLauncher.launch(client.signInIntent)
-                    },
-                    modifier = Modifier.align(Alignment.Center)
-                )
-            } else {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    if (parcels.isEmpty()) {
-                        EmptyStateView(
-                            isSyncing = isSyncing,
-                            onSyncClick = { viewModel.syncEmails() },
-                            userEmail = signedInAccount?.email,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(vertical = 8.dp)
-                        ) {
-                            items(
-                                items = parcels,
-                                key = { it.parcel.trackingNumber }
-                            ) { parcelWithItems ->
-                                ParcelCard(
-                                    parcelWithItems = parcelWithItems,
-                                    onDeleteClick = { trackingNum ->
-                                        viewModel.deleteParcel(trackingNum)
-                                    }
-                                )
-                            }
+            Column(modifier = Modifier.fillMaxSize()) {
+                // If neither AliExpress nor Gmail is connected, show banner with choice
+                if (!isAliExpressLoggedIn && signedInAccount == null) {
+                    ConnectionHeaderBanner(
+                        onOpenAliExpress = { showAliExpressLoginDialog = true },
+                        onOpenGoogle = {
+                            val client = viewModel.getAuthManager().getBasicSignInClient()
+                            signInLauncher.launch(client.signInIntent)
+                        }
+                    )
+                }
+
+                // Two Tabs: "В пути" (с треками) и "Ожидают отправки" (без трека)
+                TabRow(
+                    selectedTabIndex = selectedTab,
+                    containerColor = MaterialTheme.colorScheme.surface
+                ) {
+                    Tab(
+                        selected = selectedTab == 0,
+                        onClick = { selectedTab = 0 },
+                        text = {
+                            Text(
+                                text = "В пути (${inTransitParcels.size})",
+                                fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                    )
+                    Tab(
+                        selected = selectedTab == 1,
+                        onClick = { selectedTab = 1 },
+                        text = {
+                            Text(
+                                text = "Ожидают отправки (${pendingParcels.size})",
+                                fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                    )
+                }
+
+                // Content of current tab
+                val currentList = if (selectedTab == 0) inTransitParcels else pendingParcels
+
+                if (currentList.isEmpty()) {
+                    EmptyTabStateView(
+                        isPendingTab = selectedTab == 1,
+                        isSyncing = isSyncing,
+                        onSyncClick = {
+                            if (isAliExpressLoggedIn) viewModel.syncAliExpressOrders()
+                            else if (signedInAccount != null) viewModel.syncGmailEmails()
+                            else showAliExpressLoginDialog = true
+                        }
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(vertical = 8.dp)
+                    ) {
+                        items(
+                            items = currentList,
+                            key = { it.parcel.trackingNumber }
+                        ) { parcelWithItems ->
+                            ParcelCard(
+                                parcelWithItems = parcelWithItems,
+                                onDeleteClick = { trackingNum ->
+                                    viewModel.deleteParcel(trackingNum)
+                                }
+                            )
                         }
                     }
                 }
             }
         }
     }
+
+    if (showAliExpressLoginDialog) {
+        AliExpressLoginDialog(
+            onDismissRequest = { showAliExpressLoginDialog = false },
+            onLoginSuccess = { cookies ->
+                showAliExpressLoginDialog = false
+                viewModel.onAliExpressLoginSuccess(cookies)
+            }
+        )
+    }
 }
 
 @Composable
-fun GoogleSignInCard(
-    onDirectSignInClick: () -> Unit,
-    onBasicSignInClick: () -> Unit,
-    modifier: Modifier = Modifier
+fun ConnectionHeaderBanner(
+    onOpenAliExpress: () -> Unit,
+    onOpenGoogle: () -> Unit
 ) {
-    val context = LocalContext.current
-    val currentSha1 = remember { SignatureHelper.getAppSignatureSha1(context) }
-
     Card(
-        modifier = modifier
-            .fillMaxWidth(0.92f)
-            .padding(16.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(12.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.AccountCircle,
-                contentDescription = null,
-                modifier = Modifier.size(56.dp),
-                tint = MaterialTheme.colorScheme.primary
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Подключите ваш аккаунт",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Для прямой синхронизации всех заказов и трек-номеров выполните вход:",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
             )
             Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = "Вход через Google Почту",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "Приложение автоматически найдет все трек-номера и заказы AliExpress из ваших писем и объединит их в посылки.",
-                style = MaterialTheme.typography.bodyMedium,
-                textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Button(
-                onClick = onDirectSignInClick,
-                modifier = Modifier.fillMaxWidth()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Войти через Google")
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedButton(
-                onClick = onBasicSignInClick,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Альтернативный вход (если ошибка 10)")
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                shape = MaterialTheme.shapes.small,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("SHA1", currentSha1))
-                        Toast.makeText(context, "SHA-1 скопирован!", Toast.LENGTH_SHORT).show()
-                    }
-            ) {
-                Column(modifier = Modifier.padding(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Отпечаток этого APK (нажмите для копирования):",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Icon(
-                            imageVector = Icons.Default.ContentCopy,
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Text(
-                        text = "Пакет: ${context.packageName}",
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                    Text(
-                        text = "SHA-1: $currentSha1",
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
+                Button(
+                    onClick = onOpenAliExpress,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Войти в AliExpress")
+                }
+                OutlinedButton(
+                    onClick = onOpenGoogle,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Вход через Google")
                 }
             }
         }
@@ -303,54 +326,59 @@ fun GoogleSignInCard(
 }
 
 @Composable
-fun EmptyStateView(
+fun EmptyTabStateView(
+    isPendingTab: Boolean,
     isSyncing: Boolean,
-    onSyncClick: () -> Unit,
-    userEmail: String? = null,
-    modifier: Modifier = Modifier
+    onSyncClick: () -> Unit
 ) {
-    Column(
-        modifier = modifier.padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        contentAlignment = Alignment.Center
     ) {
-        Icon(
-            imageVector = Icons.Default.Inbox,
-            contentDescription = null,
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colorScheme.outline
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "Посылок пока нет",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = if (userEmail != null)
-                "В ящике $userEmail пока не найдено сохраненных посылок. Нажмите кнопку ниже, чтобы проверить письма от AliExpress."
-            else
-                "Нажмите кнопку ниже, чтобы проверить входящие письма от AliExpress и сформировать посылки.",
-            style = MaterialTheme.typography.bodyMedium,
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(modifier = Modifier.height(24.dp))
-        Button(
-            onClick = onSyncClick,
-            enabled = !isSyncing
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            if (isSyncing) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onPrimary
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Проверяем почту...")
-            } else {
-                Text("Синхронизировать почту")
+            Icon(
+                imageVector = if (isPendingTab) Icons.Default.HourglassEmpty else Icons.Default.LocalShipping,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.outline
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = if (isPendingTab) "Нет заказов, ожидающих отправки" else "Нет посылок в пути",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = if (isPendingTab)
+                    "Здесь будут отображаться покупки по номерам заказов, пока продавец не передал их в доставку."
+                else
+                    "Как только товару будет присвоен трек-номер (внутренний китайский или международный), он появится здесь.",
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            Button(
+                onClick = onSyncClick,
+                enabled = !isSyncing
+            ) {
+                if (isSyncing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Синхронизируем...")
+                } else {
+                    Text("Обновить заказы")
+                }
             }
         }
     }

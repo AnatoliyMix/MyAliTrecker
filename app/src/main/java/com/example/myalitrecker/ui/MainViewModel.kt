@@ -8,6 +8,8 @@ import com.example.myalitrecker.data.local.AppDatabase
 import com.example.myalitrecker.data.local.model.ParcelWithItems
 import com.example.myalitrecker.data.remote.GmailAuthManager
 import com.example.myalitrecker.data.remote.GmailRepository
+import com.example.myalitrecker.data.remote.aliexpress.AliExpressOrderRepository
+import com.example.myalitrecker.data.remote.aliexpress.AliExpressSessionManager
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.api.client.googleapis.extensions.android.gms.auth.UserRecoverableAuthIOException
 import com.google.api.client.googleapis.json.GoogleJsonResponseException
@@ -22,6 +24,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val authManager = GmailAuthManager(application)
     private val gmailRepository = GmailRepository(application)
+    private val aliExpressSessionManager = AliExpressSessionManager(application)
+    private val aliExpressRepository = AliExpressOrderRepository(application)
     private val parcelDao = AppDatabase.getInstance(application).parcelDao()
 
     val parcels: StateFlow<List<ParcelWithItems>> = parcelDao.getParcelsWithItems()
@@ -34,6 +38,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _signedInAccount = MutableStateFlow<GoogleSignInAccount?>(null)
     val signedInAccount: StateFlow<GoogleSignInAccount?> = _signedInAccount.asStateFlow()
 
+    private val _isAliExpressLoggedIn = MutableStateFlow(aliExpressSessionManager.isLoggedIn())
+    val isAliExpressLoggedIn: StateFlow<Boolean> = _isAliExpressLoggedIn.asStateFlow()
+
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
 
@@ -45,16 +52,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         checkSignedInAccount()
+        checkAliExpressSession()
     }
 
     fun checkSignedInAccount() {
         _signedInAccount.value = authManager.getSignedInAccount()
     }
 
+    fun checkAliExpressSession() {
+        _isAliExpressLoggedIn.value = aliExpressSessionManager.isLoggedIn()
+    }
+
+    fun onAliExpressLoginSuccess(cookies: String) {
+        aliExpressSessionManager.saveCookies(cookies)
+        _isAliExpressLoggedIn.value = true
+        _syncMessage.value = "Успешный вход в AliExpress! Запускаем синхронизацию..."
+        syncAliExpressOrders()
+    }
+
+    fun logoutAliExpress() {
+        aliExpressSessionManager.clearSession()
+        _isAliExpressLoggedIn.value = false
+        _syncMessage.value = "Вы вышли из AliExpress"
+    }
+
+    fun syncAliExpressOrders() {
+        if (_isSyncing.value) return
+        _isSyncing.value = true
+        _syncMessage.value = null
+
+        viewModelScope.launch {
+            val result = aliExpressRepository.syncOrders()
+            _isSyncing.value = false
+            if (result.isSuccess) {
+                val count = result.getOrDefault(0)
+                _syncMessage.value = if (count > 0)
+                    "Синхронизация AliExpress: обновлено заказов — $count"
+                else
+                    "Синхронизация AliExpress: заказы обновлены"
+            } else {
+                val err = result.exceptionOrNull()?.localizedMessage ?: "Ошибка синхронизации"
+                _syncMessage.value = "AliExpress: $err"
+                checkAliExpressSession()
+            }
+        }
+    }
+
     fun onGoogleSignInResult(account: GoogleSignInAccount?) {
         _signedInAccount.value = account
         if (account != null) {
-            syncEmails()
+            syncGmailEmails()
         }
     }
 
@@ -62,7 +109,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _syncMessage.value = msg
     }
 
-    fun syncEmails() {
+    fun syncGmailEmails() {
         val account = _signedInAccount.value ?: return
         if (_isSyncing.value) return
 
@@ -75,9 +122,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (result.isSuccess) {
                 val count = result.getOrDefault(0)
                 _syncMessage.value = if (count > 0)
-                    "Синхронизация завершена: обработано писем — $count"
+                    "Синхронизация почты: обработано писем — $count"
                 else
-                    "Синхронизация завершена: новых писем от AliExpress не найдено"
+                    "Синхронизация почты: новых писем не найдено"
             } else {
                 val ex = result.exceptionOrNull()
                 if (ex is UserRecoverableAuthIOException) {
@@ -116,4 +163,5 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun getAuthManager(): GmailAuthManager = authManager
+    fun getAliExpressSessionManager(): AliExpressSessionManager = aliExpressSessionManager
 }
